@@ -3,5 +3,12 @@ name = "nginx-log"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "nginx-log"
+path = "src/nginx_log.rs"
+
 [dependencies]
+chrono = { workspace = true }
 winnow = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
