@@ -1,9 +1,17 @@
 #![allow(unused)]
-use std::net::IpAddr;
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    str::FromStr,
+};
 
 use anyhow::anyhow;
 use chrono::{format::Pad, DateTime, Utc};
-use winnow::PResult;
+use winnow::{
+    ascii::{digit1, space0},
+    combinator::{alt, delimited, separated, terminated},
+    token::take_until,
+    PResult, Parser,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 enum HttpMethod {
@@ -57,13 +65,11 @@ fn parse_nginx_log(s: &str) -> PResult<NginxLog> {
     parse_ignored(input)?;
     parse_ignored(input)?;
     let datetime = parse_datetime(input)?;
-    println!("datetime: {:?}", datetime);
     let (method, url, protocol) = parse_http(input)?;
     let status = parse_http_status(input)?;
-    println!("status: {:?}", status);
     let body_bytes = parse_http_body_bytes(input)?;
-    let referer = parse_http_referer(input)?;
-    let user_agent = parse_http_user_agent(input)?;
+    let referer = parse_quoted_string(input)?;
+    let user_agent = parse_quoted_string(input)?;
     Ok(NginxLog {
         addr: ip,
         datetime,
@@ -77,46 +83,140 @@ fn parse_nginx_log(s: &str) -> PResult<NginxLog> {
     })
 }
 
-fn parse_ip(_s: &mut &str) -> PResult<IpAddr> {
-    todo!()
+fn parse_ip(s: &mut &str) -> PResult<IpAddr> {
+    let res: Vec<u8> = separated(4, digit1.parse_to::<u8>(), ".").parse_next(s)?;
+    space0(s)?;
+    Ok(IpAddr::V4(Ipv4Addr::new(res[0], res[1], res[2], res[3])))
 }
 
-fn parse_ignored(_s: &mut &str) -> PResult<()> {
-    todo!()
+fn parse_ignored(s: &mut &str) -> PResult<()> {
+    "- ".parse_next(s)?;
+    Ok(())
 }
 
-fn parse_datetime(_s: &mut &str) -> PResult<DateTime<Utc>> {
-    todo!()
+fn parse_datetime(s: &mut &str) -> PResult<DateTime<Utc>> {
+    let ret = delimited('[', take_until(1.., ']'), ']').parse_next(s)?;
+    space0(s)?;
+    Ok(DateTime::parse_from_str(ret, "%d/%b/%Y:%H:%M:%S %z")
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap())
 }
 
-fn parse_http(_s: &mut &str) -> PResult<(HttpMethod, String, HttpProto)> {
-    todo!()
+fn parse_http(s: &mut &str) -> PResult<(HttpMethod, String, HttpProto)> {
+    let parser = (parse_http_method, parse_http_url, parse_http_proto);
+    let ret = delimited('"', parser, '"').parse_next(s)?;
+    space0(s)?;
+    Ok(ret)
 }
 
-fn parse_http_method(_s: &mut &str) -> PResult<HttpMethod> {
-    todo!()
+fn parse_http_method(s: &mut &str) -> PResult<HttpMethod> {
+    let ret = alt((
+        "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE", "PATCH",
+    ))
+    .parse_to()
+    .parse_next(s)?;
+    space0(s)?;
+    Ok(ret)
 }
 
-fn parse_http_url(_s: &mut &str) -> PResult<String> {
-    todo!()
+fn parse_http_url(s: &mut &str) -> PResult<String> {
+    let ret = take_until(1.., ' ').parse_next(s)?;
+    space0(s)?;
+    Ok(ret.to_string())
 }
 
-fn parse_http_proto(_s: &mut &str) -> PResult<HttpProto> {
-    todo!()
+fn parse_http_proto(s: &mut &str) -> PResult<HttpProto> {
+    let ret = alt(("HTTP/1.0", "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"))
+        .parse_to()
+        .parse_next(s)?;
+    space0(s)?;
+    Ok(ret)
 }
 
-fn parse_http_status(_s: &mut &str) -> PResult<u16> {
-    todo!()
+fn parse_http_status(s: &mut &str) -> PResult<u16> {
+    let ret = digit1.parse_to().parse_next(s)?;
+    space0(s)?;
+    Ok(ret)
 }
 
-fn parse_http_body_bytes(_s: &mut &str) -> PResult<u64> {
-    todo!()
+fn parse_http_body_bytes(s: &mut &str) -> PResult<u64> {
+    let ret = digit1.parse_to().parse_next(s)?;
+    space0(s)?;
+    Ok(ret)
 }
 
-fn parse_http_referer(_s: &mut &str) -> PResult<String> {
-    todo!()
+fn parse_quoted_string(s: &mut &str) -> PResult<String> {
+    let ret = delimited('"', take_until(1.., '"'), '"').parse_next(s)?;
+    space0(s)?;
+    Ok(ret.to_string())
 }
 
-fn parse_http_user_agent(_s: &mut &str) -> PResult<String> {
-    todo!()
+impl FromStr for HttpProto {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "HTTP/1.0" => Ok(HttpProto::HTTP1_0),
+            "HTTP/1.1" => Ok(HttpProto::HTTP1_1),
+            "HTTP/2.0" => Ok(HttpProto::HTTP2_0),
+            "HTTP/3.0" => Ok(HttpProto::HTTP3_0),
+            _ => Err(anyhow::anyhow!("Unknown HTTP protocol: {}", s)),
+        }
+    }
+}
+
+impl FromStr for HttpMethod {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "GET" => Ok(HttpMethod::Get),
+            "POST" => Ok(HttpMethod::Post),
+            "PUT" => Ok(HttpMethod::Put),
+            "DELETE" => Ok(HttpMethod::Delete),
+            "HEAD" => Ok(HttpMethod::Head),
+            "OPTIONS" => Ok(HttpMethod::Options),
+            "CONNECT" => Ok(HttpMethod::Connect),
+            "TRACE" => Ok(HttpMethod::Trace),
+            "PATCH" => Ok(HttpMethod::Patch),
+            _ => Err(anyhow::anyhow!("Unknown HTTP method: {}", s)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn parse_ip_should_work() -> Result<()> {
+        let mut s = "1.1.1.1";
+        let ip = parse_ip(&mut s).unwrap();
+        assert_eq!(s, "");
+        assert_eq!(ip, IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_datetime_should_work() -> Result<()> {
+        let mut s = "[17/May/2015:08:05:32 +0000]";
+        let dt = parse_datetime(&mut s).unwrap();
+        assert_eq!(s, "");
+        assert_eq!(dt, Utc.with_ymd_and_hms(2015, 5, 17, 8, 5, 32).unwrap());
+        Ok(())
+    }
+
+    #[test]
+    fn parse_http_should_work() -> Result<()> {
+        let mut s = "\"GET /downloads/product_1 HTTP/1.1\"";
+        let (method, url, protocol) = parse_http(&mut s).unwrap();
+        assert_eq!(s, "");
+        assert_eq!(method, HttpMethod::Get);
+        assert_eq!(url, "/downloads/product_1");
+        assert_eq!(protocol, HttpProto::HTTP1_1);
+        Ok(())
+    }
 }
