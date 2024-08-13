@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use winnow::{
     ascii::{digit1, multispace0},
-    combinator::{alt, delimited, opt, separated, trace},
+    combinator::{alt, delimited, opt, separated, separated_pair, trace},
     error::{ContextError, ErrMode, ParserError},
     stream::{AsChar, Stream, StreamIsPartial},
     token::take_until,
@@ -25,7 +25,7 @@ enum Num {
     Float(f64),
 }
 
-fn main() {
+fn main() -> PResult<()> {
     let s = r#"{
         "name": "John Doe",
         "age": 30,
@@ -36,10 +36,16 @@ fn main() {
             "zip": 10001
         }
     }"#;
+
+    let input = &mut (&*s);
+    let v = parse_json(input)?;
+    println!("{:#?}", v);
+    Ok(())
 }
 
 fn parse_json(input: &str) -> PResult<JsonValue> {
-    todo!()
+    let input = &mut (&*input);
+    parse_value(input)
 }
 
 fn parse_null(input: &mut &str) -> PResult<()> {
@@ -83,7 +89,7 @@ fn parse_array(input: &mut &str) -> PResult<Vec<JsonValue>> {
     delimited(sep1, parse_values, sep2).parse_next(input)
 }
 
-fn sep_with_space<Input, Output, Error, ParseNext>(
+pub fn sep_with_space<Input, Output, Error, ParseNext>(
     mut parser: ParseNext,
 ) -> impl Parser<Input, (), Error>
 where
@@ -93,7 +99,7 @@ where
     ParseNext: Parser<Input, Output, Error>,
 {
     trace("sep_with_space", move |input: &mut Input| {
-        let _ = multispace0.parse_next(input)?;
+        multispace0.parse_next(input)?;
         parser.parse_next(input)?;
         multispace0.parse_next(input)?;
         Ok(())
@@ -101,7 +107,14 @@ where
 }
 
 fn parse_object(input: &mut &str) -> PResult<HashMap<String, JsonValue>> {
-    todo!()
+    let sep1 = sep_with_space('{');
+    let sep2 = sep_with_space('}');
+    let sep_comma = sep_with_space(',');
+    let sep_colon = sep_with_space(':');
+
+    let parse_kv_pair = separated_pair(parse_string, sep_colon, parse_value);
+    let parse_kv = separated(1.., parse_kv_pair, sep_comma);
+    delimited(sep1, parse_kv, sep2).parse_next(input)
 }
 
 fn parse_value(input: &mut &str) -> PResult<JsonValue> {
@@ -111,7 +124,7 @@ fn parse_value(input: &mut &str) -> PResult<JsonValue> {
         parse_number.map(JsonValue::Number),
         parse_string.map(JsonValue::String),
         parse_array.map(JsonValue::Array),
-        // parse_object.map(JsonValue::Object),
+        parse_object.map(JsonValue::Object),
     ))
     .parse_next(input)
 }
@@ -123,8 +136,7 @@ mod tests {
     #[test]
     fn test_parse_null_should_work() -> PResult<()> {
         let mut input = "null";
-        let ret = parse_null(&mut input)?;
-        assert_eq!(ret, ());
+        parse_null(&mut input)?;
         Ok(())
     }
 
@@ -132,11 +144,11 @@ mod tests {
     fn test_parse_bool_should_work() -> PResult<()> {
         let mut input = "true";
         let ret = parse_bool(&mut input)?;
-        assert_eq!(ret, true);
+        assert!(ret);
 
         let mut input = "false";
         let ret = parse_bool(&mut input)?;
-        assert_eq!(ret, false);
+        assert!(!ret);
         Ok(())
     }
 
@@ -201,6 +213,24 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_object_should_work() -> PResult<()> {
+        let mut input = r#"{"a": 1, "b": "hello", "c": null}"#;
+        let ret = parse_object(&mut input)?;
+        assert_eq!(
+            ret,
+            vec![
+                ("a".to_string(), JsonValue::Number(Num::Int(1))),
+                ("b".to_string(), JsonValue::String("hello".to_string())),
+                ("c".to_string(), JsonValue::Null),
+            ]
+            .into_iter()
+            .map(|v| (v.0, v.1))
+            .collect::<std::collections::HashMap<_, _>>()
+        );
         Ok(())
     }
 }
