@@ -1,0 +1,14 @@
+[package]
+name = "w-json"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "w-json"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+winnow = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }

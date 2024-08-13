@@ -1,5 +1,5 @@
 [workspace]
-members = ["nginx-log"]
+members = ["nginx-log", "w-json"]
 resolver = "2"
 
 
