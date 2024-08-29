@@ -1033,6 +1033,7 @@ dependencies = [
  "arrow",
  "chrono",
  "parquet",
+ "regex",
  "reqwest",
  "serde",
  "tokio",
