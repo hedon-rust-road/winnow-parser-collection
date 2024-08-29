@@ -22,3 +22,5 @@ parquet = { version = "52.2.0", features = [
     "arrow",
 ] }
 arrow = "52.2.0"
+strum = "0.26.3"
+strum_macros = "0.26.4"

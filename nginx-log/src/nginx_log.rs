@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::anyhow;
 use arrow::{
-    array::{Array, RecordBatch, StringArray},
+    array::{Array, Int64Array, RecordBatch, StringArray, UInt16Array, UInt64Array},
     datatypes::{DataType, Field, Schema},
 };
 use chrono::{format::Pad, DateTime, Utc};
@@ -19,6 +19,7 @@ use parquet::{
     file::{properties::WriterProperties, writer::SerializedFileWriter},
     schema::parser::parse_message_type,
 };
+use strum_macros::Display;
 use winnow::{
     ascii::{digit1, space0},
     combinator::{alt, delimited, separated, terminated},
@@ -26,7 +27,7 @@ use winnow::{
     PResult, Parser,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Display)]
 enum HttpMethod {
     Get,
     Post,
@@ -39,7 +40,7 @@ enum HttpMethod {
     Patch,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Display)]
 enum HttpProto {
     HTTP1_0,
     HTTP1_1,
@@ -71,22 +72,11 @@ async fn main() -> anyhow::Result<()> {
     let logs = parse_nginx_logs().await?;
     println!("{:?}", logs[1]);
 
+    let filename = write_logs_to_parquet(logs)?;
+    println!("{}", filename);
     Ok(())
 }
 
-/**
- * struct NginxLog {
-    addr: IpAddr,
-    datetime: DateTime<Utc>,
-    method: HttpMethod,
-    url: String,
-    protocol: HttpProto,
-    status: u16,
-    body_bytes: u64,
-    referer: String,
-    user_agent: String,
-}
- */
 fn write_logs_to_parquet(logs: Vec<NginxLog>) -> anyhow::Result<String> {
     let schema = Schema::new(vec![
         Field::new("addr", DataType::Utf8, false),
@@ -105,15 +95,81 @@ fn write_logs_to_parquet(logs: Vec<NginxLog>) -> anyhow::Result<String> {
     let mut writer = ArrowWriter::try_new(file, Arc::new(schema), None)?;
 
     let addrs = logs
-        .into_iter()
+        .iter()
         .map(|v| v.addr.to_string())
         .collect::<Vec<String>>();
 
-    let batch = RecordBatch::try_from_iter(vec![(
-        "addr",
-        Arc::new(StringArray::from(addrs)) as Arc<dyn Array>,
-    )])?;
-    Ok("()".to_string())
+    let datetimes = logs
+        .iter()
+        .map(|v| v.datetime.timestamp())
+        .collect::<Vec<i64>>();
+
+    let methods = logs
+        .iter()
+        .map(|v| v.method.to_string())
+        .collect::<Vec<String>>();
+
+    let urls = logs
+        .iter()
+        .map(|v| v.url.to_string())
+        .collect::<Vec<String>>();
+
+    let protocols = logs
+        .iter()
+        .map(|v| v.protocol.to_string())
+        .collect::<Vec<String>>();
+
+    let body_bytes = logs.iter().map(|v| v.body_bytes).collect::<Vec<u64>>();
+
+    let status = logs.iter().map(|v| v.status).collect::<Vec<u16>>();
+
+    let referer = logs
+        .iter()
+        .map(|v| v.referer.to_string())
+        .collect::<Vec<String>>();
+
+    let user_agents = logs
+        .iter()
+        .map(|v| v.user_agent.to_string())
+        .collect::<Vec<String>>();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("addr", Arc::new(StringArray::from(addrs)) as Arc<dyn Array>),
+        (
+            "datetime",
+            Arc::new(Int64Array::from(datetimes)) as Arc<dyn Array>,
+        ),
+        (
+            "method",
+            Arc::new(StringArray::from(methods)) as Arc<dyn Array>,
+        ),
+        ("url", Arc::new(StringArray::from(urls)) as Arc<dyn Array>),
+        (
+            "protocol",
+            Arc::new(StringArray::from(protocols)) as Arc<dyn Array>,
+        ),
+        (
+            "status",
+            Arc::new(UInt16Array::from(status)) as Arc<dyn Array>,
+        ),
+        (
+            "body_bytes",
+            Arc::new(UInt64Array::from(body_bytes)) as Arc<dyn Array>,
+        ),
+        (
+            "referer",
+            Arc::new(StringArray::from(referer)) as Arc<dyn Array>,
+        ),
+        (
+            "user_agent",
+            Arc::new(StringArray::from(user_agents)) as Arc<dyn Array>,
+        ),
+    ])?;
+
+    writer.write(&batch)?;
+    writer.close()?;
+
+    Ok(filename.to_string())
 }
 
 async fn parse_nginx_logs() -> anyhow::Result<Vec<NginxLog>> {
