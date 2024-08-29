@@ -12,3 +12,12 @@ chrono = { workspace = true }
 winnow = { workspace = true }
 serde = { workspace = true }
 anyhow = { workspace = true }
+reqwest = "0.12.7"
+tokio = { version = "1.39.3", features = ["rt", "rt-multi-thread", "macros"] }
+parquet = { version = "52.2.0", features = [
+    "serde",
+    "json",
+    "serde_json",
+    "arrow",
+] }
+arrow = "52.2.0"

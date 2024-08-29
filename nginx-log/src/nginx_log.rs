@@ -1,11 +1,24 @@
 #![allow(unused)]
 use std::{
+    fs::File,
     net::{IpAddr, Ipv4Addr},
     str::FromStr,
+    sync::Arc,
 };
 
 use anyhow::anyhow;
+use arrow::{
+    array::{Array, RecordBatch, StringArray},
+    datatypes::{DataType, Field, Schema},
+};
 use chrono::{format::Pad, DateTime, Utc};
+use parquet::{
+    arrow::ArrowWriter,
+    column::writer::ColumnWriter,
+    data_type::ByteArray,
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
+    schema::parser::parse_message_type,
+};
 use winnow::{
     ascii::{digit1, space0},
     combinator::{alt, delimited, separated, terminated},
@@ -51,12 +64,72 @@ struct NginxLog {
 // we need to parse:
 // 93.180.71.3 - - [17/May/2015:08:05:32 +0000] "GET /downloads/product_1 HTTP/1.1" 304 0 "-" "Debian APT-HTTP/1.3 (0.8.16~exp12ubuntu10.21)"
 // with winnow parser combinator
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    println!("{:?}", parse_one_nginx_log().await?);
+
+    let logs = parse_nginx_logs().await?;
+    println!("{:?}", logs[1]);
+
+    Ok(())
+}
+
+/**
+ * struct NginxLog {
+    addr: IpAddr,
+    datetime: DateTime<Utc>,
+    method: HttpMethod,
+    url: String,
+    protocol: HttpProto,
+    status: u16,
+    body_bytes: u64,
+    referer: String,
+    user_agent: String,
+}
+ */
+fn write_logs_to_parquet(logs: Vec<NginxLog>) -> anyhow::Result<String> {
+    let schema = Schema::new(vec![
+        Field::new("addr", DataType::Utf8, false),
+        Field::new("datetime", DataType::Int64, false),
+        Field::new("method", DataType::Utf8, false),
+        Field::new("url", DataType::Utf8, false),
+        Field::new("protocol", DataType::Utf8, false),
+        Field::new("status", DataType::UInt16, false),
+        Field::new("body_bytes", DataType::UInt64, true),
+        Field::new("referer", DataType::Utf8, true),
+        Field::new("user_agent", DataType::Utf8, true),
+    ]);
+
+    let filename = "nginx_logs.parquet";
+    let file = File::create(filename)?;
+    let mut writer = ArrowWriter::try_new(file, Arc::new(schema), None)?;
+
+    let addrs = logs
+        .into_iter()
+        .map(|v| v.addr.to_string())
+        .collect::<Vec<String>>();
+
+    let batch = RecordBatch::try_from_iter(vec![(
+        "addr",
+        Arc::new(StringArray::from(addrs)) as Arc<dyn Array>,
+    )])?;
+    Ok("()".to_string())
+}
+
+async fn parse_nginx_logs() -> anyhow::Result<Vec<NginxLog>> {
+    let nginx_log_url = "https://raw.githubusercontent.com/elastic/examples/master/Common Data Formats/nginx_logs/nginx_logs";
+    let nginx_log = reqwest::get(nginx_log_url).await?.text().await?;
+    let logs = nginx_log
+        .lines()
+        .filter_map(|v| parse_nginx_log(v).ok())
+        .collect::<Vec<_>>();
+    Ok(logs)
+}
+
+async fn parse_one_nginx_log() -> anyhow::Result<NginxLog> {
     let s = r#"93.180.71.3 - - [17/May/2015:08:05:32 +0000] "GET /downloads/product_1 HTTP/1.1" 304 0 "-" "Debian APT-HTTP/1.3 (0.8.16~exp12ubuntu10.21)""#;
     let log = parse_nginx_log(s).map_err(|e| anyhow!("Failed to parse log: {:?}", e))?;
-
-    println!("{:?}", log);
-    Ok(())
+    Ok(log)
 }
 
 fn parse_nginx_log(s: &str) -> PResult<NginxLog> {
